@@ -57,11 +57,14 @@ cdef class TPBWT:
 
         # allocate empty arrays to hold matching segments
         self.num_segments = 0
+        self.compress_phase_seq = True
         self.segments_capacity = 10000000
         self.segments_id1 = <long *>malloc(self.segments_capacity * sizeof(long))
         self.segments_id2 = <long *>malloc(self.segments_capacity * sizeof(long))
         self.segments_id1_haplotype = <uint8_t *>malloc(self.segments_capacity * sizeof(uint8_t))
         self.segments_id2_haplotype = <uint8_t *>malloc(self.segments_capacity * sizeof(uint8_t))
+        self.segments_id1_haplotype_orig = <uint8_t *>malloc(self.segments_capacity * sizeof(uint8_t))
+        self.segments_id2_haplotype_orig = <uint8_t *>malloc(self.segments_capacity * sizeof(uint8_t))
         self.segments_start = <uint32_t *>malloc(self.segments_capacity * sizeof(uint32_t))
         self.segments_end = <uint32_t *>malloc(self.segments_capacity * sizeof(uint32_t))
         self.segments_start_cm = <double *>malloc(self.segments_capacity * sizeof(double))
@@ -70,6 +73,11 @@ cdef class TPBWT:
         self.segments_end_bp = <uint32_t *>malloc(self.segments_capacity * sizeof(uint32_t))
         self.segments_chromosome = []
         self.segment_output_file = NULL
+        self.segments_id1_hap_seq = []
+        self.segments_id2_hap_seq = []
+        self.segments_id1_hap_pos_bp = []
+        self.segments_id2_hap_pos_bp = []
+        self.segment_phase_seq = {}
 
         self.current_matches_start = NULL
         self.current_matches_end = NULL
@@ -82,6 +90,8 @@ cdef class TPBWT:
         free(self.segments_id2)
         free(self.segments_id1_haplotype)
         free(self.segments_id2_haplotype)
+        free(self.segments_id1_haplotype_orig)
+        free(self.segments_id2_haplotype_orig)
         free(self.segments_start)
         free(self.segments_end)
         free(self.segments_start_cm)
@@ -199,7 +209,7 @@ cdef class TPBWT:
         # file for output segments
         if segments_out_path != NULL:
             self.segment_output_file = fopen(segments_out_path, 'w') 
-            row = 'id1,id2,id1_hap,id2_hap,start,end,start_cm,end_cm,start_bp,end_bp,chromosome\n'
+            row = 'id1,id2,id1_hap,id2_hap,id1_hap_orig,id2_hap_orig,id1_hap_seq,id2_hap_seq,id1_hap_pos_bp,id2_hap_pos_bp,start,end,start_cm,end_cm,start_bp,end_bp,chromosome\n'
             row_len = len(row)
             temp_row = row.encode()
             fwrite(<char*>temp_row, sizeof(char), row_len, self.segment_output_file)
@@ -774,6 +784,22 @@ cdef class TPBWT:
 
         cdef long id_temp
         cdef uint8_t out_of_sample = 0
+        cdef long id1_name
+        cdef long id2_name
+        cdef bint out_first_is_id1
+        cdef object key
+        cdef object seq_pair
+        cdef object seq1
+        cdef object seq2
+        cdef object pos1
+        cdef object pos2
+        cdef long id1_orig
+        cdef long id2_orig
+        cdef uint8_t id1_orig_hap
+        cdef uint8_t id2_orig_hap
+        cdef uint8_t id1_seq_hap
+        cdef uint8_t id2_seq_hap
+        cdef uint32_t switch_bp
         if id2 < id1:
             id_temp = id1
             id1 = id2
@@ -781,6 +807,18 @@ cdef class TPBWT:
         if id2 >= self.num_all_x_haplotypes:
             out_of_sample = 1
             id2 = id2 - self.num_all_x_haplotypes
+
+        id1_name = self.x_haplotypes.get_haplotype_name(id1)
+        if out_of_sample:
+            id2_name = self.y_haplotypes.get_haplotype_name(id2)
+        else:
+            id2_name = self.x_haplotypes.get_haplotype_name(id2)
+        switch_bp = self.x_haplotypes.get_physical_position_from_site(start)
+        out_first_is_id1 = out_of_sample or (id1_name < id2_name)
+        if out_first_is_id1:
+            key = (id1_name, id2_name, out_of_sample)
+        else:
+            key = (id2_name, id1_name, out_of_sample)
 
         cdef long id1_com
         cdef long id2_com
@@ -851,38 +889,90 @@ cdef class TPBWT:
                 elif start < self.current_matches_end[id1][id2_com]:
                     found_switch_in_id2 = True
             
-                if found_switch_in_id1:
-                    # swap ids
-                    id_temp = id1
-                    id1 = id1_com
-                    id1_com = id_temp
-                    # change the phase switch indicator
-                    if self.current_switch_error[id1] == 0:
-                        self.current_switch_error[id1] = 1
-                        self.current_switch_error[id1_com] = 1
+            if found_switch_in_id1:
+                # swap ids
+                id_temp = id1
+                id1 = id1_com
+                id1_com = id_temp
+                # change the phase switch indicator
+                if self.current_switch_error[id1] == 0:
+                    self.current_switch_error[id1] = 1
+                    self.current_switch_error[id1_com] = 1
+                else:
+                    self.current_switch_error[id1] = 0
+                    self.current_switch_error[id1_com] = 0
+                id1_seq_hap = self.x_haplotypes.get_haplotype_number(id1)
+                if out_of_sample:
+                    id2_seq_hap = self.y_haplotypes.get_haplotype_number(id2)
+                else:
+                    id2_seq_hap = self.x_haplotypes.get_haplotype_number(id2)
+                seq_pair = self.segment_phase_seq.get(key)
+                if seq_pair is None:
+                    if out_first_is_id1:
+                        seq1 = [int(id1_seq_hap)]
+                        seq2 = [int(id2_seq_hap)]
+                        pos1 = [int(switch_bp)]
+                        pos2 = [int(switch_bp)]
                     else:
-                        self.current_switch_error[id1] = 0
-                        self.current_switch_error[id1_com] = 0
-                if found_switch_in_id2:
-                    # swap ids
-                    id_temp = id2
-                    id2 = id2_com
-                    id2_com = id_temp
-                    # change the phase switch indicator
-                    if out_of_sample == 0:
-                        if self.current_switch_error[id2] == 0:
-                            self.current_switch_error[id2] = 1
-                            self.current_switch_error[id2_com] = 1
-                        else:
-                            self.current_switch_error[id2] = 0
-                            self.current_switch_error[id2_com] = 0
+                        seq1 = [int(id2_seq_hap)]
+                        seq2 = [int(id1_seq_hap)]
+                        pos1 = [int(switch_bp)]
+                        pos2 = [int(switch_bp)]
+                    self.segment_phase_seq[key] = (seq1, seq2, pos1, pos2)
+                else:
+                    seq1, seq2, pos1, pos2 = seq_pair
+                    if out_first_is_id1:
+                        seq1.append(int(id1_seq_hap))
+                        pos1.append(int(switch_bp))
                     else:
-                        if self.current_switch_error[id2 + self.num_all_x_haplotypes] == 0:
-                            self.current_switch_error[id2 + self.num_all_x_haplotypes] = 1
-                            self.current_switch_error[id2_com + self.num_all_x_haplotypes] = 1
-                        else:
-                            self.current_switch_error[id2 + self.num_all_x_haplotypes] = 0
-                            self.current_switch_error[id2_com + self.num_all_x_haplotypes] = 0
+                        seq2.append(int(id1_seq_hap))
+                        pos2.append(int(switch_bp))
+            if found_switch_in_id2:
+                # swap ids
+                id_temp = id2
+                id2 = id2_com
+                id2_com = id_temp
+                # change the phase switch indicator
+                if out_of_sample == 0:
+                    if self.current_switch_error[id2] == 0:
+                        self.current_switch_error[id2] = 1
+                        self.current_switch_error[id2_com] = 1
+                    else:
+                        self.current_switch_error[id2] = 0
+                        self.current_switch_error[id2_com] = 0
+                else:
+                    if self.current_switch_error[id2 + self.num_all_x_haplotypes] == 0:
+                        self.current_switch_error[id2 + self.num_all_x_haplotypes] = 1
+                        self.current_switch_error[id2_com + self.num_all_x_haplotypes] = 1
+                    else:
+                        self.current_switch_error[id2 + self.num_all_x_haplotypes] = 0
+                        self.current_switch_error[id2_com + self.num_all_x_haplotypes] = 0
+                id1_seq_hap = self.x_haplotypes.get_haplotype_number(id1)
+                if out_of_sample:
+                    id2_seq_hap = self.y_haplotypes.get_haplotype_number(id2)
+                else:
+                    id2_seq_hap = self.x_haplotypes.get_haplotype_number(id2)
+                seq_pair = self.segment_phase_seq.get(key)
+                if seq_pair is None:
+                    if out_first_is_id1:
+                        seq1 = [int(id1_seq_hap)]
+                        seq2 = [int(id2_seq_hap)]
+                        pos1 = [int(switch_bp)]
+                        pos2 = [int(switch_bp)]
+                    else:
+                        seq1 = [int(id2_seq_hap)]
+                        seq2 = [int(id1_seq_hap)]
+                        pos1 = [int(switch_bp)]
+                        pos2 = [int(switch_bp)]
+                    self.segment_phase_seq[key] = (seq1, seq2, pos1, pos2)
+                else:
+                    seq1, seq2, pos1, pos2 = seq_pair
+                    if out_first_is_id1:
+                        seq2.append(int(id2_seq_hap))
+                        pos2.append(int(switch_bp))
+                    else:
+                        seq1.append(int(id2_seq_hap))
+                        pos1.append(int(switch_bp))
             
             # truncate any leftover invalidly phased segments
             if start < self.current_matches_end[id1][id2_com]:
@@ -898,20 +988,47 @@ cdef class TPBWT:
                 else:
                     self.current_matches_end[id1_com][id2] = start
           
+        id1_seq_hap = self.x_haplotypes.get_haplotype_number(id1)
+        if out_of_sample:
+            id2_seq_hap = self.y_haplotypes.get_haplotype_number(id2)
+        else:
+            id2_seq_hap = self.x_haplotypes.get_haplotype_number(id2)
+
         if self.current_matches_end[id1][id2] == 0:
             # the first segment for this pair, so save it
+            if out_first_is_id1:
+                self.segment_phase_seq[key] = ([int(id1_seq_hap)], [int(id2_seq_hap)],
+                                               [int(switch_bp)], [int(switch_bp)])
+            else:
+                self.segment_phase_seq[key] = ([int(id2_seq_hap)], [int(id1_seq_hap)],
+                                               [int(switch_bp)], [int(switch_bp)])
             self.current_matches_start[id1][id2] = start
             self.current_matches_end[id1][id2] = end
         elif start > self.current_matches_end[id1][id2] + gap_threshold:
             # a new segment starts past the gap_threshold, so report the old segment
             self.report_segment(id1, id2, self.current_matches_start[id1][id2], \
                                 self.current_matches_end[id1][id2], L_f) 
+            if out_first_is_id1:
+                self.segment_phase_seq[key] = ([int(id1_seq_hap)], [int(id2_seq_hap)],
+                                               [int(switch_bp)], [int(switch_bp)])
+            else:
+                self.segment_phase_seq[key] = ([int(id2_seq_hap)], [int(id1_seq_hap)],
+                                               [int(switch_bp)], [int(switch_bp)])
             self.current_matches_start[id1][id2] = start
             self.current_matches_end[id1][id2] = end
         else:
             # merge the segments
             if start < self.current_matches_start[id1][id2]:
                 self.current_matches_start[id1][id2] = start
+                seq_pair = self.segment_phase_seq.get(key)
+                if seq_pair is not None:
+                    seq1, seq2, pos1, pos2 = seq_pair
+                    if out_first_is_id1:
+                        pos1[0] = int(switch_bp)
+                        pos2[0] = int(switch_bp)
+                    else:
+                        pos1[0] = int(switch_bp)
+                        pos2[0] = int(switch_bp)
             if end > self.current_matches_end[id1][id2]:
                 self.current_matches_end[id1][id2] = end
 
@@ -955,6 +1072,21 @@ cdef class TPBWT:
         cdef long id2_name
         cdef uint8_t id1_hap
         cdef uint8_t id2_hap
+        cdef uint8_t id1_hap_orig
+        cdef uint8_t id2_hap_orig
+        cdef long id1_orig
+        cdef long id2_orig
+        cdef bint out_first_is_id1
+        cdef object key
+        cdef object seq_pair
+        cdef object seq1
+        cdef object seq2
+        cdef object seq1_str
+        cdef object seq2_str
+        cdef object pos1
+        cdef object pos2
+        cdef object pos1_str
+        cdef object pos2_str
         cdef uint8_t out_of_sample = 0
 
         if end_cm - start_cm >= L_f:
@@ -963,11 +1095,83 @@ cdef class TPBWT:
                 out_of_sample = 1
                 id2_name = self.y_haplotypes.get_haplotype_name(id2)
                 id2_hap = self.y_haplotypes.get_haplotype_number(id2)
+                if self.current_switch_error[id2 + self.num_all_x_haplotypes] == 1:
+                    id2_orig = self.y_haplotypes.get_haplotype_complement(id2)
+                else:
+                    id2_orig = id2
+                id2_hap_orig = self.y_haplotypes.get_haplotype_number(id2_orig)
             else:
                 id2_name = self.x_haplotypes.get_haplotype_name(id2)
                 id2_hap = self.x_haplotypes.get_haplotype_number(id2)
+                if self.current_switch_error[id2] == 1:
+                    id2_orig = self.x_haplotypes.get_haplotype_complement(id2)
+                else:
+                    id2_orig = id2
+                id2_hap_orig = self.x_haplotypes.get_haplotype_number(id2_orig)
             id1_name = self.x_haplotypes.get_haplotype_name(id1)
             id1_hap = self.x_haplotypes.get_haplotype_number(id1)
+            if self.current_switch_error[id1] == 1:
+                id1_orig = self.x_haplotypes.get_haplotype_complement(id1)
+            else:
+                id1_orig = id1
+            id1_hap_orig = self.x_haplotypes.get_haplotype_number(id1_orig)
+
+            out_first_is_id1 = out_of_sample or (id1_name < id2_name)
+            if out_first_is_id1:
+                key = (id1_name, id2_name, out_of_sample)
+            else:
+                key = (id2_name, id1_name, out_of_sample)
+            seq_pair = self.segment_phase_seq.pop(key, None)
+            if seq_pair is None:
+                if out_first_is_id1:
+                    seq1 = [int(id1_hap_orig)]
+                    seq2 = [int(id2_hap_orig)]
+                    pos1 = [int(start_bp)]
+                    pos2 = [int(start_bp)]
+                else:
+                    seq1 = [int(id2_hap_orig)]
+                    seq2 = [int(id1_hap_orig)]
+                    pos1 = [int(start_bp)]
+                    pos2 = [int(start_bp)]
+            else:
+                seq1, seq2, pos1, pos2 = seq_pair
+            id1_hap_orig = int(seq1[0])
+            id2_hap_orig = int(seq2[0])
+            if len(pos1) == 0:
+                pos1 = [int(start_bp)]
+                seq1 = [int(id1_hap_orig)]
+            elif int(pos1[0]) != int(start_bp):
+                pos1.insert(0, int(start_bp))
+                seq1.insert(0, int(seq1[0]))
+            if len(pos2) == 0:
+                pos2 = [int(start_bp)]
+                seq2 = [int(id2_hap_orig)]
+            elif int(pos2[0]) != int(start_bp):
+                pos2.insert(0, int(start_bp))
+                seq2.insert(0, int(seq2[0]))
+            if self.compress_phase_seq:
+                if len(seq1) > 1:
+                    new_seq1 = [seq1[0]]
+                    new_pos1 = [pos1[0]]
+                    for i in range(1, len(seq1)):
+                        if int(seq1[i]) != int(new_seq1[-1]):
+                            new_seq1.append(seq1[i])
+                            new_pos1.append(pos1[i])
+                    seq1 = new_seq1
+                    pos1 = new_pos1
+                if len(seq2) > 1:
+                    new_seq2 = [seq2[0]]
+                    new_pos2 = [pos2[0]]
+                    for i in range(1, len(seq2)):
+                        if int(seq2[i]) != int(new_seq2[-1]):
+                            new_seq2.append(seq2[i])
+                            new_pos2.append(pos2[i])
+                    seq2 = new_seq2
+                    pos2 = new_pos2
+            seq1_str = ';'.join([str(x) for x in seq1])
+            seq2_str = ';'.join([str(x) for x in seq2])
+            pos1_str = ';'.join([str(x) for x in pos1])
+            pos2_str = ';'.join([str(x) for x in pos2])
 
             if self.segment_output_file != NULL:
                 # write segments to file
@@ -977,11 +1181,23 @@ cdef class TPBWT:
                     row += str(id2_name) + ','
                     row += str(id1_hap) + ','
                     row += str(id2_hap) + ','
+                    row += str(id1_hap_orig) + ','
+                    row += str(id2_hap_orig) + ','
+                    row += str(seq1_str) + ','
+                    row += str(seq2_str) + ','
+                    row += str(pos1_str) + ','
+                    row += str(pos2_str) + ','
                 else:
                     row += str(id2_name) + ','
                     row += str(id1_name) + ','
                     row += str(id2_hap) + ','
                     row += str(id1_hap) + ','
+                    row += str(id2_hap_orig) + ','
+                    row += str(id1_hap_orig) + ','
+                    row += str(seq1_str) + ','
+                    row += str(seq2_str) + ','
+                    row += str(pos1_str) + ','
+                    row += str(pos2_str) + ','
                 row += str(start) + ','
                 row += str(end) + ','
                 #row += str(round(start_cm, 2)) + ','
@@ -1002,11 +1218,23 @@ cdef class TPBWT:
                     self.segments_id2[self.num_segments] = id2_name
                     self.segments_id1_haplotype[self.num_segments] = id1_hap
                     self.segments_id2_haplotype[self.num_segments] = id2_hap
+                    self.segments_id1_haplotype_orig[self.num_segments] = id1_hap_orig
+                    self.segments_id2_haplotype_orig[self.num_segments] = id2_hap_orig
+                    self.segments_id1_hap_seq.append(seq1_str)
+                    self.segments_id2_hap_seq.append(seq2_str)
+                    self.segments_id1_hap_pos_bp.append(pos1_str)
+                    self.segments_id2_hap_pos_bp.append(pos2_str)
                 else:
                     self.segments_id1[self.num_segments] = id2_name
                     self.segments_id2[self.num_segments] = id1_name
                     self.segments_id1_haplotype[self.num_segments] = id2_hap
                     self.segments_id2_haplotype[self.num_segments] = id1_hap
+                    self.segments_id1_haplotype_orig[self.num_segments] = id2_hap_orig
+                    self.segments_id2_haplotype_orig[self.num_segments] = id1_hap_orig
+                    self.segments_id1_hap_seq.append(seq1_str)
+                    self.segments_id2_hap_seq.append(seq2_str)
+                    self.segments_id1_hap_pos_bp.append(pos1_str)
+                    self.segments_id2_hap_pos_bp.append(pos2_str)
                 self.segments_start[self.num_segments] = start
                 self.segments_end[self.num_segments] = end
                 self.segments_start_cm[self.num_segments] = start_cm
@@ -1023,6 +1251,8 @@ cdef class TPBWT:
                     self.segments_id2 = <long *>realloc(self.segments_id2, self.segments_capacity * sizeof(long))
                     self.segments_id1_haplotype = <uint8_t *>realloc(self.segments_id1_haplotype, self.segments_capacity * sizeof(uint8_t))
                     self.segments_id2_haplotype = <uint8_t *>realloc(self.segments_id2_haplotype, self.segments_capacity * sizeof(uint8_t))
+                    self.segments_id1_haplotype_orig = <uint8_t *>realloc(self.segments_id1_haplotype_orig, self.segments_capacity * sizeof(uint8_t))
+                    self.segments_id2_haplotype_orig = <uint8_t *>realloc(self.segments_id2_haplotype_orig, self.segments_capacity * sizeof(uint8_t))
                     self.segments_start = <uint32_t *>realloc(self.segments_start, self.segments_capacity * sizeof(uint32_t))
                     self.segments_end = <uint32_t *>realloc(self.segments_end, self.segments_capacity * sizeof(uint32_t))
                     self.segments_start_cm = <double *>realloc(self.segments_start_cm, self.segments_capacity * sizeof(double))
@@ -1038,6 +1268,12 @@ cdef class TPBWT:
         id2 = []
         id1_haplotype = []
         id2_haplotype = []
+        id1_haplotype_orig = []
+        id2_haplotype_orig = []
+        id1_hap_seq = []
+        id2_hap_seq = []
+        id1_hap_pos_bp = []
+        id2_hap_pos_bp = []
         start = []
         end = []
         start_cm = []
@@ -1049,6 +1285,12 @@ cdef class TPBWT:
             id2.append(self.segments_id2[i])
             id1_haplotype.append(self.segments_id1_haplotype[i])
             id2_haplotype.append(self.segments_id2_haplotype[i])
+            id1_haplotype_orig.append(self.segments_id1_haplotype_orig[i])
+            id2_haplotype_orig.append(self.segments_id2_haplotype_orig[i])
+            id1_hap_seq.append(self.segments_id1_hap_seq[i])
+            id2_hap_seq.append(self.segments_id2_hap_seq[i])
+            id1_hap_pos_bp.append(self.segments_id1_hap_pos_bp[i])
+            id2_hap_pos_bp.append(self.segments_id2_hap_pos_bp[i])
             start.append(self.segments_start[i])
             end.append(self.segments_end[i])
             start_cm.append(self.segments_start_cm[i])
@@ -1060,6 +1302,12 @@ cdef class TPBWT:
         id2 = np.array(id2, dtype=np.int64)
         id1_haplotype = np.array(id1_haplotype, dtype=np.int64)
         id2_haplotype = np.array(id2_haplotype, dtype=np.int64)
+        id1_haplotype_orig = np.array(id1_haplotype_orig, dtype=np.int64)
+        id2_haplotype_orig = np.array(id2_haplotype_orig, dtype=np.int64)
+        id1_hap_seq = np.array(id1_hap_seq, dtype=object)
+        id2_hap_seq = np.array(id2_hap_seq, dtype=object)
+        id1_hap_pos_bp = np.array(id1_hap_pos_bp, dtype=object)
+        id2_hap_pos_bp = np.array(id2_hap_pos_bp, dtype=object)
         start = np.array(start, dtype=np.int64)
         end = np.array(end, dtype=np.int64)
         start_cm = np.array(start_cm, dtype=np.float64)
@@ -1071,6 +1319,12 @@ cdef class TPBWT:
                                          'id2': id2,
                                          'id1_haplotype': id1_haplotype,
                                          'id2_haplotype': id2_haplotype,
+                                         'id1_haplotype_orig': id1_haplotype_orig,
+                                         'id2_haplotype_orig': id2_haplotype_orig,
+                                         'id1_hap_seq': id1_hap_seq,
+                                         'id2_hap_seq': id2_hap_seq,
+                                         'id1_hap_pos_bp': id1_hap_pos_bp,
+                                         'id2_hap_pos_bp': id2_hap_pos_bp,
                                          'start': start,
                                          'end': end,
                                          'start_cm': start_cm,
@@ -1088,6 +1342,8 @@ cdef class TPBWT:
         free(self.segments_id2)
         free(self.segments_id1_haplotype)
         free(self.segments_id2_haplotype)
+        free(self.segments_id1_haplotype_orig)
+        free(self.segments_id2_haplotype_orig)
         free(self.segments_start)
         free(self.segments_end)
         free(self.segments_start_cm)
@@ -1098,6 +1354,8 @@ cdef class TPBWT:
         self.segments_id2 = <long *>malloc(self.segments_capacity * sizeof(long))
         self.segments_id1_haplotype = <uint8_t *>malloc(self.segments_capacity * sizeof(uint8_t))
         self.segments_id2_haplotype = <uint8_t *>malloc(self.segments_capacity * sizeof(uint8_t))
+        self.segments_id1_haplotype_orig = <uint8_t *>malloc(self.segments_capacity * sizeof(uint8_t))
+        self.segments_id2_haplotype_orig = <uint8_t *>malloc(self.segments_capacity * sizeof(uint8_t))
         self.segments_start = <uint32_t *>malloc(self.segments_capacity * sizeof(uint32_t))
         self.segments_end = <uint32_t *>malloc(self.segments_capacity * sizeof(uint32_t))
         self.segments_start_cm = <double *>malloc(self.segments_capacity * sizeof(double))
@@ -1105,6 +1363,11 @@ cdef class TPBWT:
         self.segments_start_bp = <uint32_t *>malloc(self.segments_capacity * sizeof(uint32_t))
         self.segments_end_bp = <uint32_t *>malloc(self.segments_capacity * sizeof(uint32_t))
         self.segments_chromosome = []
+        self.segments_id1_hap_seq = []
+        self.segments_id2_hap_seq = []
+        self.segments_id1_hap_pos_bp = []
+        self.segments_id2_hap_pos_bp = []
+        self.segment_phase_seq = {}
 
 
     
@@ -1158,7 +1421,7 @@ cdef class TPBWTAnalysis:
         return(0)
 
 
-    cpdef compute_ibd(self, HaplotypeAlignment x_haplotypes, HaplotypeAlignment y_haplotypes=None, compressed_out_path=None, uint32_t L_m=300, double L_f=3.0, uint32_t missing_site_threshold=10, bint use_phase_correction=True, chromosome='all', segments_out_path=None, bint verbose=True):
+    cpdef compute_ibd(self, HaplotypeAlignment x_haplotypes, HaplotypeAlignment y_haplotypes=None, compressed_out_path=None, uint32_t L_m=300, double L_f=3.0, uint32_t missing_site_threshold=10, bint use_phase_correction=True, bint compress_phase_seq=True, chromosome='all', segments_out_path=None, bint verbose=True):
         """
         Method that configures the output format of the IBD compute and then iterates over each 
         chromosome. For each chromosome it sets the current chromosome in the haplotype 
@@ -1167,6 +1430,7 @@ cdef class TPBWTAnalysis:
         start_time = timeit.default_timer()
         self.x_haplotypes = x_haplotypes
         self.y_haplotypes = y_haplotypes
+        self.tpbwt.compress_phase_seq = compress_phase_seq
         if compressed_out_path:
             if not os.path.isdir(compressed_out_path):
                 os.mkdir(compressed_out_path)

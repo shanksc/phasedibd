@@ -29,7 +29,7 @@ class TestPbwtBasics(unittest.TestCase):
                                   'id2_haplotype': [0,0,0]})
         #print(ibd_segs)
         #print(true_segs)
-        self.assertTrue(np.all(ibd_segs.eq(true_segs)))
+        self.assertTrue(np.all(ibd_segs[true_segs.columns].eq(true_segs)))
     
     
     def test_vcf_no_map(self):
@@ -135,6 +135,127 @@ class TestPbwtBasics(unittest.TestCase):
         # the segments should be identical
         self.assertTrue(sum(uncompressed_ibd_results['start_cm']) == sum(uncompressed_ibd_results['start_cm']))
         self.assertTrue(sum(uncompressed_ibd_results['end_cm']) == sum(uncompressed_ibd_results['end_cm']))
+
+    def test_phase_switches(self):
+        print("\n Testing phase-switch tracking for IBD segments with multiple phase switches...")
+        vcf_path = TEST_DATA_PATH + 'phase_switch.vcf'
+        map_path = TEST_DATA_PATH + 'phase_switch.map'
+        haplotypes = ibd.VcfHaplotypeAlignment(vcf_path, map_path)
+        tpbwt = ibd.TPBWTAnalysis(template=[[1]])
+        ibd_segs = tpbwt.compute_ibd(
+            haplotypes,
+            L_m=1,
+            L_f=0,
+            use_phase_correction=True,
+            compress_phase_seq=False,
+            verbose=True,
+        )
+        print(ibd_segs[['id1', 'id2', 'id1_hap_seq', 'id2_hap_seq', 'id1_hap_pos_bp',
+                        'id2_hap_pos_bp', 'start_bp', 'end_bp']])
+        pair_segs = ibd_segs[ibd_segs['id1'] != ibd_segs['id2']].copy()
+        self.assertTrue(pair_segs.shape[0] > 0)
+
+        pair_segs['len_bp'] = pair_segs['end_bp'] - pair_segs['start_bp']
+        seg = pair_segs.sort_values('len_bp', ascending=False).iloc[0]
+        seq1 = seg['id1_hap_seq']
+        seq2 = seg['id2_hap_seq']
+        pos1 = seg['id1_hap_pos_bp']
+        pos2 = seg['id2_hap_pos_bp']
+
+        seq1_list = [int(x) for x in seq1.split(';')]
+        seq2_list = [int(x) for x in seq2.split(';')]
+        pos1_list = [int(x) for x in pos1.split(';')]
+        pos2_list = [int(x) for x in pos2.split(';')]
+
+        self.assertEqual(len(seq1_list), len(pos1_list))
+        self.assertEqual(len(seq2_list), len(pos2_list))
+        self.assertEqual(pos1_list[0], int(seg['start_bp']))
+        self.assertEqual(pos2_list[0], int(seg['start_bp']))
+        self.assertTrue(all(seg['start_bp'] <= p <= seg['end_bp'] for p in pos1_list))
+        self.assertTrue(all(seg['start_bp'] <= p <= seg['end_bp'] for p in pos2_list))
+        self.assertTrue(all(pos1_list[i] <= pos1_list[i + 1] for i in range(len(pos1_list) - 1)))
+        self.assertTrue(all(pos2_list[i] <= pos2_list[i + 1] for i in range(len(pos2_list) - 1)))
+        self.assertTrue(len(seq1_list) > 1 or len(seq2_list) > 1)
+        self.assertTrue(len(set(seq1_list)) > 1 or len(set(seq2_list)) > 1)
+        self.assertTrue(600 in pos1_list or 600 in pos2_list)
+        self.assertTrue(900 in pos1_list or 900 in pos2_list)
+
+    def test_phase_switches_compressed(self):
+        print("\n Testing phase-switch tracking with compression enabled...")
+        vcf_path = TEST_DATA_PATH + 'phase_switch.vcf'
+        map_path = TEST_DATA_PATH + 'phase_switch.map'
+        haplotypes = ibd.VcfHaplotypeAlignment(vcf_path, map_path)
+        tpbwt = ibd.TPBWTAnalysis(template=[[1]])
+        ibd_segs = tpbwt.compute_ibd(
+            haplotypes,
+            L_m=1,
+            L_f=0,
+            use_phase_correction=True,
+            compress_phase_seq=True,
+            verbose=False,
+        )
+        pair_segs = ibd_segs[ibd_segs['id1'] != ibd_segs['id2']].copy()
+        self.assertTrue(pair_segs.shape[0] > 0)
+
+        pair_segs['len_bp'] = pair_segs['end_bp'] - pair_segs['start_bp']
+        seg = pair_segs.sort_values('len_bp', ascending=False).iloc[0]
+        seq1_list = [int(x) for x in seg['id1_hap_seq'].split(';')]
+        seq2_list = [int(x) for x in seg['id2_hap_seq'].split(';')]
+        pos1_list = [int(x) for x in seg['id1_hap_pos_bp'].split(';')]
+        pos2_list = [int(x) for x in seg['id2_hap_pos_bp'].split(';')]
+
+        self.assertEqual(len(seq1_list), len(pos1_list))
+        self.assertEqual(len(seq2_list), len(pos2_list))
+        self.assertEqual(pos1_list[0], int(seg['start_bp']))
+        self.assertEqual(pos2_list[0], int(seg['start_bp']))
+        self.assertTrue(all(pos1_list[i] <= pos1_list[i + 1] for i in range(len(pos1_list) - 1)))
+        self.assertTrue(all(pos2_list[i] <= pos2_list[i + 1] for i in range(len(pos2_list) - 1)))
+        self.assertTrue(all(seq1_list[i] != seq1_list[i + 1] for i in range(len(seq1_list) - 1)))
+        self.assertTrue(all(seq2_list[i] != seq2_list[i + 1] for i in range(len(seq2_list) - 1)))
+        self.assertTrue(pos1_list[-1] < int(seg['end_bp']))
+        self.assertTrue(pos2_list[-1] < int(seg['end_bp']))
+
+    def test_phase_switches_compression_effect(self):
+        print("\n Testing compression reduces redundant phase switches...")
+        vcf_path = TEST_DATA_PATH + 'phase_switch.vcf'
+        map_path = TEST_DATA_PATH + 'phase_switch.map'
+        haplotypes = ibd.VcfHaplotypeAlignment(vcf_path, map_path)
+        tpbwt = ibd.TPBWTAnalysis(template=[[1]])
+        ibd_raw = tpbwt.compute_ibd(
+            haplotypes,
+            L_m=1,
+            L_f=0,
+            use_phase_correction=True,
+            compress_phase_seq=False,
+            verbose=False,
+        )
+        ibd_comp = tpbwt.compute_ibd(
+            haplotypes,
+            L_m=1,
+            L_f=0,
+            use_phase_correction=True,
+            compress_phase_seq=True,
+            verbose=False,
+        )
+
+        raw_pair = ibd_raw[ibd_raw['id1'] != ibd_raw['id2']].copy()
+        comp_pair = ibd_comp[ibd_comp['id1'] != ibd_comp['id2']].copy()
+        self.assertTrue(raw_pair.shape[0] > 0)
+        self.assertTrue(comp_pair.shape[0] > 0)
+
+        raw_pair['len_bp'] = raw_pair['end_bp'] - raw_pair['start_bp']
+        comp_pair['len_bp'] = comp_pair['end_bp'] - comp_pair['start_bp']
+        raw_seg = raw_pair.sort_values('len_bp', ascending=False).iloc[0]
+        comp_seg = comp_pair.sort_values('len_bp', ascending=False).iloc[0]
+
+        raw_seq1 = [int(x) for x in raw_seg['id1_hap_seq'].split(';')]
+        comp_seq1 = [int(x) for x in comp_seg['id1_hap_seq'].split(';')]
+        raw_seq2 = [int(x) for x in raw_seg['id2_hap_seq'].split(';')]
+        comp_seq2 = [int(x) for x in comp_seg['id2_hap_seq'].split(';')]
+
+        self.assertTrue(len(comp_seq1) <= len(raw_seq1))
+        self.assertTrue(len(comp_seq2) <= len(raw_seq2))
+        self.assertTrue(len(comp_seq1) < len(raw_seq1) or len(comp_seq2) < len(raw_seq2))
 
 
 if __name__ == '__main__':

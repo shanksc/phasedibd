@@ -15,12 +15,20 @@ cdef class TPBWT:
     cdef uint8_t num_templates
     cdef uint8_t template_length
     cdef public chromosome
+    cdef bint compress_phase_seq
     cdef uint32_t num_all_x_haplotypes
     cdef uint32_t num_all_y_haplotypes
     cdef long* segments_id1
     cdef long* segments_id2
     cdef uint8_t* segments_id1_haplotype
     cdef uint8_t* segments_id2_haplotype
+    cdef uint8_t* segments_id1_haplotype_orig
+    cdef uint8_t* segments_id2_haplotype_orig
+    cdef object segments_id1_hap_seq
+    cdef object segments_id2_hap_seq
+    cdef object segments_id1_hap_pos_bp
+    cdef object segments_id2_hap_pos_bp
+    cdef object segment_phase_seq
     cdef uint32_t* segments_start
     cdef uint32_t* segments_end
     cdef double* segments_start_cm
@@ -53,5 +61,4 @@ cdef class TPBWTAnalysis:
     cdef TPBWT tpbwt
 
     cpdef compress_alignment(self, compressed_out_path, HaplotypeAlignment x_haplotypes, HaplotypeAlignment y_haplotypes=?, bint verbose=?)
-    cpdef compute_ibd(self, HaplotypeAlignment x_haplotypes, HaplotypeAlignment y_haplotypes=?, compressed_out_path=?, uint32_t L_m=?, double L_f=?, uint32_t missing_site_threshold=?, bint use_phase_correction=?, chromosome=?, segments_out_path=?, bint verbose=?)
-
+    cpdef compute_ibd(self, HaplotypeAlignment x_haplotypes, HaplotypeAlignment y_haplotypes=?, compressed_out_path=?, uint32_t L_m=?, double L_f=?, uint32_t missing_site_threshold=?, bint use_phase_correction=?, bint compress_phase_seq=?, chromosome=?, segments_out_path=?, bint verbose=?)

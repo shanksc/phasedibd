@@ -62,16 +62,17 @@ Other parameters are set in the `compute_ibd` method in `TPBWTAnalysis`:
 
 The output is either a pandas `DataFrame` or a `.csv` file with the following columns.
 ```
-chromosome    start    end    start_cm    end_cm    id1    id2    id1_haplotype    id2_haplotype
-1             143      2500   2.375       9.8427    243    634    0                1 
-1             3470     7037   12.679      26.348    84     591    1                1                             
+id1    id2    id1_haplotype    id2_haplotype    id1_haplotype_orig    id2_haplotype_orig    id1_hap_seq    id2_hap_seq    id1_hap_pos_bp    id2_hap_pos_bp    start    end    start_cm    end_cm    start_bp    end_bp    chromosome
+243    634    0                1                0                     1                     0;1           1             16888577       16888577       143      2500   2.375       9.8427    16888577    16900001  1
+84     591    1                1                1                     1                     1             1             17007138       17007138       3470     7037   12.679      26.348    17007138    19107656  1
 ```
 The `start` and `end` columns are the start and end SNP, not the physical (bp) positions. So the number of SNPs a segment spans is `end` - `start`. The columns `id1_haplotype` and `id2_haplotype` must always be 0 or 1.
+The columns `id1_haplotype_orig` and `id2_haplotype_orig` report the original VCF haplotype indices (0/1) at the segment start (equivalently, the first entry of `id*_hap_seq`). The columns `id1_hap_seq` and `id2_hap_seq` report the sequence of original haplotype indices across phase switches within the segment. The columns `id1_hap_pos_bp` and `id2_hap_pos_bp` report the corresponding start positions (bp) for each sequence entry. The sequence entries apply over half-open intervals: the i-th haplotype applies on [pos_i, pos_{i+1}) and the last entry applies on [pos_last, end_bp). By default, consecutive identical haplotype states are compressed; pass `compress_phase_seq=False` to `compute_ibd` to disable compression for debugging.
 
 Any self IBD is included in the output like this:
 ```
-chromosome    start    end    start_cm    end_cm    id1    id2    id1_haplotype    id2_haplotype
-1             7467     9940   27.236      50.621    586    586    1                0   
+id1    id2    id1_haplotype    id2_haplotype    id1_haplotype_orig    id2_haplotype_orig    id1_hap_seq    id2_hap_seq    id1_hap_pos_bp    id2_hap_pos_bp    start    end    start_cm    end_cm    start_bp    end_bp    chromosome
+586    586    1                0                1                     0                     1             0             20000000       20000000       7467     9940   27.236      50.621    20000000    21000000  1
 ```
 
 
