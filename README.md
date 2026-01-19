@@ -67,7 +67,7 @@ id1    id2    id1_haplotype    id2_haplotype    id1_haplotype_orig    id2_haplot
 84     591    1                1                1                     1                     1             1             17007138       17007138       3470     7037   12.679      26.348    17007138    19107656  1
 ```
 The `start` and `end` columns are the start and end SNP, not the physical (bp) positions. So the number of SNPs a segment spans is `end` - `start`. The columns `id1_haplotype` and `id2_haplotype` must always be 0 or 1.
-The columns `id1_haplotype_orig` and `id2_haplotype_orig` report the original VCF haplotype indices (0/1) at the segment start (equivalently, the first entry of `id*_hap_seq`). The columns `id1_hap_seq` and `id2_hap_seq` report the sequence of original haplotype indices across phase switches within the segment. The columns `id1_hap_pos_bp` and `id2_hap_pos_bp` report the corresponding start positions (bp) for each sequence entry. The sequence entries apply over half-open intervals: the i-th haplotype applies on [pos_i, pos_{i+1}) and the last entry applies on [pos_last, end_bp). By default, consecutive identical haplotype states are compressed; pass `compress_phase_seq=False` to `compute_ibd` to disable compression for debugging.
+The columns `id1_haplotype_orig` and `id2_haplotype_orig` give the original VCF haplotype index (0/1) at segment start (the first entry of `id*_hap_seq`). The `id*_hap_seq` and `id*_hap_pos_bp` columns encode phase switches within the segment: each entry applies on [pos_i, pos_{i+1}) and the last on [pos_last, end_bp). By default, consecutive identical states are compressed; pass `compress_phase_seq=False` to `compute_ibd` to keep the full sequence.
 
 Any self IBD is included in the output like this:
 ```
